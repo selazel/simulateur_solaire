@@ -38,9 +38,11 @@ def geocode_address(address: str):
 @st.cache_data(show_spinner=True)
 def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     """
-    Appelle l'API PVGIS 'seriescalc' pour obtenir une production horaire sur 1 an.
-    Retourne un DataFrame indexé par datetime (naive, sans timezone) avec une colonne pv_kwh.
+    Appelle l'API PVGIS 'seriescalc' et convertit la série 10 minutes en série horaire.
+    Retourne un DataFrame avec un DatetimeIndex (sans timezone) et une colonne 'pv_kwh'.
     """
+    import math
+
     url = "https://re.jrc.ec.europa.eu/api/seriescalc"
     params = {
         "lat": lat,
@@ -65,22 +67,33 @@ def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
             f"{list(data.get('outputs', {}).keys())}"
         )
 
-    hourly = data["outputs"]["hourly"]
-    df = pd.DataFrame(hourly)
+    hourly_raw = data["outputs"]["hourly"]
+    df = pd.DataFrame(hourly_raw)
 
-    # On laisse pandas deviner le format, c’est plus robuste
     if "time" not in df.columns or "P" not in df.columns:
         raise ValueError("Colonnes 'time' ou 'P' manquantes dans la réponse PVGIS.")
 
-    # Parse en datetime naïf (sans timezone) pour éviter les soucis
-    df["time"] = pd.to_datetime(df["time"], errors="raise")
-    df.set_index("time", inplace=True)
+    # Format PVGIS : 20200101:0010  => %Y%m%d:%H%M
+    df["dt"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M")
 
-    # P [W] → kWh sur 1h
-    df["pv_kwh"] = df["P"] / 1000.0
+    # Les points sont toutes les 10 minutes => 10/60 h = 1/6 h
+    # P est en W => énergie (kWh sur l'intervalle) = P(W) * (Δt_h) / 1000
+    # Ici Δt = 10 min => P / 6000
+    df["kwh_interval"] = df["P"] / 6000.0
 
-    df = df[["pv_kwh"]].sort_index()
-    return df
+    # On regroupe par heure (on "rabaisse" à l'heure pleine)
+    df["hour"] = df["dt"].dt.floor("H")
+    hourly = (
+        df.groupby("hour")["kwh_interval"]
+          .sum()
+          .to_frame(name="pv_kwh")
+          .sort_index()
+    )
+
+    # L'index est un DatetimeIndex naïf (sans timezone), ce qui matche le reste du code
+    hourly.index.name = None
+    return hourly
+
 
 
 
@@ -394,5 +407,6 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
 
 
