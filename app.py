@@ -38,8 +38,10 @@ def geocode_address(address: str):
 @st.cache_data(show_spinner=True)
 def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     """
-    Appelle PVGIS 'seriescalc' et renvoie un DataFrame avec un DatetimeIndex naïf
-    et une colonne 'pv_kwh' correctement intégrée (en fonction du pas réel).
+    Appelle l'API PVGIS 'seriescalc', convertit la série (10 min ou autre)
+    en série HORAIRE, et renvoie un DataFrame avec :
+        index : DatetimeIndex (heure pleine, sans timezone)
+        colonne : 'pv_kwh' (énergie produite sur chaque heure)
     """
     url = "https://re.jrc.ec.europa.eu/api/v5_3/seriescalc"
     params = {
@@ -47,40 +49,57 @@ def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
         "lon": lon,
         "startyear": 2020,
         "endyear": 2020,
-        "pvcalculation": 1,          # 0 = rayonnement seul, 1 = PV + rayonnement
+        "pvcalculation": 1,          # production PV activée
         "peakpower": peakpower_kw,   # kWc
-        "loss": 14,                  # %
+        "loss": 14,                  # pertes %
         "mountingplace": "building",
         "angle": angle,
         "aspect": aspect,
-        "outputformat": "json"
+        "outputformat": "json",
     }
+
     r = requests.get(url, params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
 
     if "outputs" not in data or "hourly" not in data["outputs"]:
-        raise ValueError(f"Réponse PVGIS inattendue : clés outputs = {list(data.get('outputs', {}).keys())}")
+        raise ValueError(
+            f"Réponse PVGIS inattendue. Clés outputs = {list(data.get('outputs', {}).keys())}"
+        )
 
     df = pd.DataFrame(data["outputs"]["hourly"])
 
     if "time" not in df.columns or "P" not in df.columns:
         raise ValueError("Colonnes 'time' ou 'P' manquantes dans la réponse PVGIS.")
 
-    # Format PVGIS type 20200101:0010
+    # 1) Parsing du format de date PVGIS : 20200101:0010
     df["time"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M", errors="raise")
     df = df.sort_values("time").set_index("time")
 
-    # Calcul du pas de temps réel (en heures)
+    # 2) Calcul du pas de temps réel (en heures)
     if len(df) > 1:
         dt_hours = (df.index[1] - df.index[0]).total_seconds() / 3600.0
     else:
-        dt_hours = 1.0  # fallback
+        dt_hours = 1.0  # fallback si un seul point
 
-    # P en W → énergie sur l’intervalle : P(W) * dt(h) / 1000
-    df["pv_kwh"] = df["P"] * dt_hours / 1000.0
+    # 3) P en W → énergie sur l'intervalle (kWh)
+    #    E = P(W) * Δt(h) / 1000
+    df["pv_kwh_interval"] = df["P"] * dt_hours / 1000.0
 
-    return df[["pv_kwh"]]
+    # 4) On agrège par heure pleine pour matcher la conso (load_df)
+    hourly = (
+        df["pv_kwh_interval"]
+        .resample("H")
+        .sum()
+        .to_frame(name="pv_kwh")
+        .sort_index()
+    )
+
+    # index naïf (sans timezone) comme build_load_timeseries
+    hourly.index = hourly.index.tz_localize(None)
+
+    return hourly
+
 
 
 
@@ -395,6 +414,7 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
 
 
 
