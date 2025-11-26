@@ -47,9 +47,9 @@ def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     params = {
         "lat": lat,
         "lon": lon,
-        "startyear": 2020,
-        "endyear": 2020,
-        "pvcalculation": 1,
+        "startyear": 2025,
+        "endyear": 2025,
+        "pvcalculation": 2,
         "peakpower": peakpower_kw,
         "loss": 14,
         "mountingplace": "building",
@@ -407,6 +407,7 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
 
 
 
