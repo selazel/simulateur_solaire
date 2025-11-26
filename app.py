@@ -38,20 +38,18 @@ def geocode_address(address: str):
 @st.cache_data(show_spinner=True)
 def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     """
-    Appelle l'API PVGIS 'seriescalc' et convertit la série 10 minutes en série horaire.
-    Retourne un DataFrame avec un DatetimeIndex (sans timezone) et une colonne 'pv_kwh'.
+    Appelle PVGIS 'seriescalc' et renvoie un DataFrame avec un DatetimeIndex naïf
+    et une colonne 'pv_kwh' correctement intégrée (en fonction du pas réel).
     """
-    import math
-
-    url = "https://re.jrc.ec.europa.eu/api/seriescalc"
+    url = "https://re.jrc.ec.europa.eu/api/v5_3/seriescalc"
     params = {
         "lat": lat,
         "lon": lon,
-        "startyear": 2025,
-        "endyear": 2025,
-        "pvcalculation": 2,
-        "peakpower": peakpower_kw,
-        "loss": 14,
+        "startyear": 2020,
+        "endyear": 2020,
+        "pvcalculation": 1,          # 0 = rayonnement seul, 1 = PV + rayonnement
+        "peakpower": peakpower_kw,   # kWc
+        "loss": 14,                  # %
         "mountingplace": "building",
         "angle": angle,
         "aspect": aspect,
@@ -62,37 +60,27 @@ def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     data = r.json()
 
     if "outputs" not in data or "hourly" not in data["outputs"]:
-        raise ValueError(
-            f"Réponse PVGIS inattendue. Clés 'outputs' : "
-            f"{list(data.get('outputs', {}).keys())}"
-        )
+        raise ValueError(f"Réponse PVGIS inattendue : clés outputs = {list(data.get('outputs', {}).keys())}")
 
-    hourly_raw = data["outputs"]["hourly"]
-    df = pd.DataFrame(hourly_raw)
+    df = pd.DataFrame(data["outputs"]["hourly"])
 
     if "time" not in df.columns or "P" not in df.columns:
         raise ValueError("Colonnes 'time' ou 'P' manquantes dans la réponse PVGIS.")
 
-    # Format PVGIS : 20200101:0010  => %Y%m%d:%H%M
-    df["dt"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M")
+    # Format PVGIS type 20200101:0010
+    df["time"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M", errors="raise")
+    df = df.sort_values("time").set_index("time")
 
-    # Les points sont toutes les 10 minutes => 10/60 h = 1/6 h
-    # P est en W => énergie (kWh sur l'intervalle) = P(W) * (Δt_h) / 1000
-    # Ici Δt = 10 min => P / 6000
-    df["kwh_interval"] = df["P"] / 6000.0
+    # Calcul du pas de temps réel (en heures)
+    if len(df) > 1:
+        dt_hours = (df.index[1] - df.index[0]).total_seconds() / 3600.0
+    else:
+        dt_hours = 1.0  # fallback
 
-    # On regroupe par heure (on "rabaisse" à l'heure pleine)
-    df["hour"] = df["dt"].dt.floor("H")
-    hourly = (
-        df.groupby("hour")["kwh_interval"]
-          .sum()
-          .to_frame(name="pv_kwh")
-          .sort_index()
-    )
+    # P en W → énergie sur l’intervalle : P(W) * dt(h) / 1000
+    df["pv_kwh"] = df["P"] * dt_hours / 1000.0
 
-    # L'index est un DatetimeIndex naïf (sans timezone), ce qui matche le reste du code
-    hourly.index.name = None
-    return hourly
+    return df[["pv_kwh"]]
 
 
 
@@ -407,6 +395,7 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
 
 
 
