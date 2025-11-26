@@ -47,16 +47,20 @@ def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     params = {
         "lat": lat,
         "lon": lon,
-        "startyear": 2020,
-        "endyear": 2020,
+        "startyear": 2025,
+        "endyear": 2025,
         "pvcalculation": 1,          # production PV activée
         "peakpower": peakpower_kw,   # kWc
         "loss": 14,                  # pertes %
         "mountingplace": "building",
-        "angle": angle,
-        "aspect": aspect,
         "outputformat": "json",
     }
+
+    if auto_optimal:
+        params["optimalangles"] = 1
+    else:
+    params["angle"] = angle
+    params["aspect"] = aspect
 
     r = requests.get(url, params=params, timeout=30)
     r.raise_for_status()
@@ -265,6 +269,8 @@ with st.sidebar:
         placeholder="Ex : 10 rue de la Paix, 75002 Paris, France"
     )
 
+    auto_optimal = st.checkbox("Laisser le simulateur optimiser l'angle et l'orientation", True)
+    
     col_p1, col_p2 = st.columns(2)
     with col_p1:
         kwc = st.number_input("Puissance installée (kWc)", 1.0, 36.0, 6.0, 0.5)
@@ -414,6 +420,7 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
 
 
 
