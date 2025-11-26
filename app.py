@@ -59,8 +59,8 @@ def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     if auto_optimal:
         params["optimalangles"] = 1
     else:
-    params["angle"] = angle
-    params["aspect"] = aspect
+        params["angle"] = angle
+        params["aspect"] = aspect
 
     r = requests.get(url, params=params, timeout=30)
     r.raise_for_status()
@@ -420,6 +420,7 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
 
 
 
