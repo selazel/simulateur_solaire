@@ -38,37 +38,50 @@ def geocode_address(address: str):
 @st.cache_data(show_spinner=True)
 def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     """
-    Appelle l'API PVGIS pour obtenir une production horaire sur 1 an.
-    Retourne un DataFrame indexé par datetime (Europe/Paris)
-    avec une colonne pv_kwh (énergie produite par heure).
+    Appelle l'API PVGIS 'seriescalc' pour obtenir une production horaire sur 1 an.
+    Retourne un DataFrame indexé par datetime (Europe/Paris) avec une colonne pv_kwh.
     """
-    url = "https://re.jrc.ec.europa.eu/api/PVcalc"
+    url = "https://re.jrc.ec.europa.eu/api/seriescalc"
     params = {
         "lat": lat,
         "lon": lon,
-        "peakpower": peakpower_kw,
-        "loss": 14,         # pertes système (câbles, onduleur, etc.)
-        "angle": angle,     # inclinaison
-        "aspect": aspect,   # azimut (0 = sud, -90 = est, 90 = ouest)
-        "hourly": 1,
+        # une seule année pour ne pas avoir un fichier énorme
+        "startyear": 2020,
+        "endyear": 2020,
+        "pvcalculation": 1,          # demande le calcul PV
+        "peakpower": peakpower_kw,   # kWc installés
+        "loss": 14,                  # pertes système en %
+        "mountingplace": "building",
+        "angle": angle,              # inclinaison
+        "aspect": aspect,            # azimut (0 = sud, -90 = est, 90 = ouest)
         "outputformat": "json"
     }
     r = requests.get(url, params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
 
-    # Structure : data["outputs"]["hourly"] = liste de dicts
+    # Vérif de structure
+    if "outputs" not in data or "hourly" not in data["outputs"]:
+        raise ValueError(
+            f"Réponse PVGIS inattendue. Clés 'outputs' disponibles : "
+            f"{list(data.get('outputs', {}).keys())}"
+        )
+
     hourly = data["outputs"]["hourly"]
     df = pd.DataFrame(hourly)
 
-    # On suppose la colonne "P" = puissance AC en kW sur la dernière heure
-    # donc énergie sur l'heure ~= P * 1h
+    # Dans seriescalc, P est en W → on convertit en kWh sur 1h
     if "time" not in df.columns or "P" not in df.columns:
-        raise ValueError("Réponse PVGIS inattendue. Colonnes 'time' ou 'P' absentes.")
+        raise ValueError("Colonnes 'time' ou 'P' manquantes dans la réponse PVGIS.")
 
-    df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_convert("Europe/Paris")
+    # time au format YYYYMMDD:HHMM en UTC
+    df["time"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M", utc=True)\
+                   .tz_convert("Europe/Paris")
     df.set_index("time", inplace=True)
-    df["pv_kwh"] = df["P"]  # approx énergie sur l'heure
+
+    # P [W] → kWh sur l'heure
+    df["pv_kwh"] = df["P"] / 1000.0
+
     df = df[["pv_kwh"]].sort_index()
     return df
 
@@ -383,3 +396,4 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
