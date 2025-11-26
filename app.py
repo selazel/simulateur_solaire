@@ -39,51 +39,49 @@ def geocode_address(address: str):
 def get_pvgis_hourly(lat, lon, peakpower_kw, angle, aspect):
     """
     Appelle l'API PVGIS 'seriescalc' pour obtenir une production horaire sur 1 an.
-    Retourne un DataFrame indexé par datetime (Europe/Paris) avec une colonne pv_kwh.
+    Retourne un DataFrame indexé par datetime (naive, sans timezone) avec une colonne pv_kwh.
     """
     url = "https://re.jrc.ec.europa.eu/api/seriescalc"
     params = {
         "lat": lat,
         "lon": lon,
-        # une seule année pour ne pas avoir un fichier énorme
         "startyear": 2020,
         "endyear": 2020,
-        "pvcalculation": 1,          # demande le calcul PV
-        "peakpower": peakpower_kw,   # kWc installés
-        "loss": 14,                  # pertes système en %
+        "pvcalculation": 1,
+        "peakpower": peakpower_kw,
+        "loss": 14,
         "mountingplace": "building",
-        "angle": angle,              # inclinaison
-        "aspect": aspect,            # azimut (0 = sud, -90 = est, 90 = ouest)
+        "angle": angle,
+        "aspect": aspect,
         "outputformat": "json"
     }
     r = requests.get(url, params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
 
-    # Vérif de structure
     if "outputs" not in data or "hourly" not in data["outputs"]:
         raise ValueError(
-            f"Réponse PVGIS inattendue. Clés 'outputs' disponibles : "
+            f"Réponse PVGIS inattendue. Clés 'outputs' : "
             f"{list(data.get('outputs', {}).keys())}"
         )
 
     hourly = data["outputs"]["hourly"]
     df = pd.DataFrame(hourly)
 
-    # Dans seriescalc, P est en W → on convertit en kWh sur 1h
+    # On laisse pandas deviner le format, c’est plus robuste
     if "time" not in df.columns or "P" not in df.columns:
         raise ValueError("Colonnes 'time' ou 'P' manquantes dans la réponse PVGIS.")
 
-    # time au format YYYYMMDD:HHMM en UTC
-    df["time"] = pd.to_datetime(df["time"], format="%Y%m%d:%H%M", utc=True)\
-                   .tz_convert("Europe/Paris")
+    # Parse en datetime naïf (sans timezone) pour éviter les soucis
+    df["time"] = pd.to_datetime(df["time"], errors="raise")
     df.set_index("time", inplace=True)
 
-    # P [W] → kWh sur l'heure
+    # P [W] → kWh sur 1h
     df["pv_kwh"] = df["P"] / 1000.0
 
     df = df[["pv_kwh"]].sort_index()
     return df
+
 
 
 def daily_profile_base(params, date):
@@ -154,24 +152,24 @@ def daily_profile_base(params, date):
     return profile
 
 
-def build_load_timeseries(year, params, tz="Europe/Paris"):
+def build_load_timeseries(year, params):
     """
     Construit un DataFrame horaire sur une année avec la consommation électrique (kWh/h)
+    Index = DatetimeIndex naïf (sans timezone) pour matcher pv_df.
     """
-    rng = pd.date_range(f"{year}-01-01 00:00", f"{year}-12-31 23:00", freq="H", tz=tz)
+    rng = pd.date_range(f"{year}-01-01 00:00", f"{year}-12-31 23:00", freq="H")
     days = sorted(set(rng.date))
 
     load_values = []
     for d in days:
         day_profile = daily_profile_base(params, pd.Timestamp(d))
-        # On répète sur 24h
         load_values.extend(day_profile.tolist())
 
-    # Tronquer au cas où (année bissextile ou autre)
     load_values = load_values[:len(rng)]
 
     df = pd.DataFrame({"load_kwh": load_values}, index=rng)
     return df
+
 
 
 def simulate_savings(pv_df, load_df, price_hp, price_hc=None, inj_price=0.13, hc_hours=(22, 6)):
@@ -383,11 +381,11 @@ if simulate_button:
                 "load_kwh": "Consommation (kWh)",
                 "autocons_kwh": "Autoconsommation (kWh)"
             })
-
-            # Dernière semaine de l'année (ou première, peu importe, c'est illustratif)
-            week_sample = df_plot.iloc[:24*7]
-
-            st.line_chart(week_sample)
+            
+            week_sample = df_plot.iloc[:24*7].copy()
+            week_sample = week_sample.reset_index().rename(columns={"index": "Date"})
+            
+            st.line_chart(week_sample, x="Date")
 
             with st.expander("Voir le détail horaire complet (table)"):
                 st.dataframe(df.head(200))
@@ -396,4 +394,5 @@ if simulate_button:
             st.error(f"Une erreur est survenue : {e}")
 else:
     st.info("Renseigne les paramètres dans la barre latérale, puis clique sur **Lancer la simulation 🚀**.")
+
 
